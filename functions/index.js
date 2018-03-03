@@ -5,7 +5,7 @@ const firebase = require('firebase');
 const googleStorage = require('@google-cloud/storage');
 const Json2csvParser = require('json2csv').Parser;
 const builder = require('xmlbuilder');
-
+const request = require('request');
 // The Firebase Admin SDK to access the Firebase Realtime Database.
 const admin = require('firebase-admin');
 admin.initializeApp(functions.config().firebase);
@@ -24,7 +24,7 @@ const storage = googleStorage({
     projectId: "sku-creator",
     keyFilename: "./service-account.json"
 });
-let path = './';
+const bucket = storage.bucket(config.storageBucket);
 let outputCSV = 'output.csv';
 let outputXML = 'output.xml';
 
@@ -32,56 +32,66 @@ let androidCSVHeader = ['Product ID','Published State','Purchase Type','Auto Tra
 
 let products = {};
 
-products.index = async () => {
+products.index = function (){
 
     let userId = '31ybhIMtJIWHCaa5maRPUUTsey23';
     let androidArr = [];
     let iosArr = [];
-    const ref = firebase.database().ref('/users/' + userId);
-    await ref.child('products').once('value').then(function(snapshot) {
-        snapshot.forEach(function(value) {
+    let ref = firebase.database().ref('/users/' + userId);
+    let count = 0;
+    ref.child('products').on('value',(snapshot) => {
+        snapshot.forEach((value) => {
             let android = {"Product ID":value.val().product_id,"Locale":value.val().locale,"Title":value.val().title,"Description":value.val().description};
             let ios = {product_id:value.val().product_id,locale:value.val().locale,title:value.val().title,description:value.val().description};
             android = Object.assign({}, value.val().android, android);
             ios = Object.assign({}, value.val().ios, ios);
             androidArr.push(android);
             iosArr.push(ios);
+            count++;
+            if (count === snapshot.numChildren()) {
+                if(androidArr.length > 0){
+                    products.createCSV(androidArr,outputCSV,(response) => {
+                        if (response.statusCode === 200){
+                            products.uploadFileToBucket(outputCSV,response.data,(res) => {
+                                if (res.statusCode === 200){
+                                    ref.child('urls').update({
+                                        "android": res.url
+                                    });
+                                }
+
+                            });
+                        }
+                    });
+                }
+                if (iosArr.length > 0) {
+                    products.createXML(iosArr,outputXML,(response) => {
+                        if (response.statusCode === 200){
+                            products.uploadFileToBucket(outputXML,response.data,(res) => {
+                                if (res.statusCode === 200) {
+                                    ref.child('urls').update({
+                                        "ios": res.url
+                                    });
+                                }
+                            });
+                        }
+                    });
+                }
+            }
         });
     });
-    if(androidArr.length > 0){
-        await products.createCSV(androidArr,outputCSV);
-        await products.uploadFileToBucket(outputCSV);
-        let filePath = `gs://${config.storageBucket}/${outputCSV}`;
-        const urlsRef = ref.child('urls');
-        urlsRef.update({
-            "android": filePath
-        });
-    }
-    if (iosArr.length > 0) {
-        await products.createXML(iosArr,outputXML);
-        await products.uploadFileToBucket(outputXML);
-        let filePath = `gs://${config.storageBucket}/${outputXML}`;
-        const urlsRef = ref.child('urls');
-        urlsRef.update({
-            "ios": filePath
-        });
-    }
-    return true;
 };
 
 //for android
-products.createCSV = async (array,filename) => {
-
+products.createCSV = function (array,filename,callback){
     const json2csvParser = new Json2csvParser({ androidCSVHeader });
     const csv = json2csvParser.parse(array);
-    fs.writeFile(path+filename, csv, 'utf-8',function(err) {
-        if (err) throw err;
-        console.log('file csv saved');
-    });
+    callback({statusCode:200,data:csv});
+
 }
 
 //for ios
-products.createXML = async (array,filename) => {
+products.createXML = function (array,filename,callback) {
+
     let builderList = builder.create('package')
         .dec('1.0', 'UTF-8')
         .att('xmlns', 'http://apple.com/itunes/importer')
@@ -107,7 +117,7 @@ products.createXML = async (array,filename) => {
                     .up()
                 .up()
                 .ele('in_app_purchases');
-    array.forEach(function(value,key){
+    array.forEach((value,key) => {
         builderList.ele('in_app_purchase')
                     .ele('locales')
                         .ele('locale',{'name': value.locale})
@@ -132,37 +142,29 @@ products.createXML = async (array,filename) => {
     });
     builderList.up();
     let xml = builderList.end({pretty: true});
-    fs.writeFile(filename, xml, 'utf-8',function(err) {
-        if (err) throw err;
-        console.log('file xml saved');
-    });
+    callback({statusCode:200,data:xml});
 }
 
-products.uploadFileToBucket = async(filename) => {
-    storage
-        .bucket(config.storageBucket)
-        .upload(path+filename)
-        .then(() => {
-            console.log(`gs://${config.storageBucket}/${filename}`);
-        })
-        .catch(err => {
-            console.error('ERROR:', err);
-        });
+products.uploadFileToBucket = function(filename,data,callback){
+
+    let gcsStream = bucket.file(filename).createWriteStream();
+
+    gcsStream.write( data);
+    gcsStream.on('error', (err) => {
+        console.error(`${ this.archive }: Error storage file write.`);
+        console.error(`${ this.archive }: ${JSON.stringify(err)}`);
+    });
+    gcsStream.on('finish', () => {
+        callback({statusCode:200,url:`gs://${config.storageBucket}/${filename}`});
+    });
+    gcsStream.end();
 }
 // Listens for new messages added to /messages/:pushId/original and creates an
 // uppercase version of the message to /messages/:pushId/uppercase
-exports.eventonWrite = functions.database.ref('/messages').onWrite((event) => {
-    return products.index();
+exports.eventonWrite = functions.database.ref('/users/{userUID}/products').onWrite((event) => {
+    products.index();
+    return true;
 });
-// exports.eventonCreate = functions.database.ref('/users').onCreate((event) => {
-//     return products.index();
-// });
-// exports.eventonUpdate = functions.database.ref('/users').onUpdate((event) => {
-//     return products.index();
-// });
-// exports.eventonDelete = functions.database.ref('/users').onDelete((event) => {
-//     return products.index();
-// });
 
 
 
