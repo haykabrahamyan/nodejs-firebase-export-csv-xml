@@ -25,8 +25,6 @@ const storage = googleStorage({
     keyFilename: "./service-account.json"
 });
 const bucket = storage.bucket(config.storageBucket);
-let outputCSV = 'output.csv';
-let outputXML = 'output.xml';
 
 let androidCSVHeader = ['Product ID','Published State','Purchase Type','Auto Translate','Locale', 'Title', 'Description','Auto Fill Prices','Price'];
 
@@ -34,47 +32,57 @@ let products = {};
 
 products.index = function (){
 
-    let userId = '31ybhIMtJIWHCaa5maRPUUTsey23';
-    let androidArr = [];
-    let iosArr = [];
-    let ref = firebase.database().ref('/users/' + userId);
-    let count = 0;
-    ref.child('products').on('value',(snapshot) => {
-        snapshot.forEach((value) => {
-            let android = {"Product ID":value.val().product_id,"Locale":value.val().locale,"Title":value.val().title,"Description":value.val().description};
-            let ios = {product_id:value.val().product_id,locale:value.val().locale,title:value.val().title,description:value.val().description};
-            android = Object.assign({}, value.val().android, android);
-            ios = Object.assign({}, value.val().ios, ios);
-            androidArr.push(android);
-            iosArr.push(ios);
-            count++;
-            if (count === snapshot.numChildren()) {
-                if(androidArr.length > 0){
-                    products.createCSV(androidArr,outputCSV,(response) => {
-                        if (response.statusCode === 200){
-                            products.uploadFileToBucket(outputCSV,response.data,(res) => {
-                                if (res.statusCode === 200){
-                                    ref.child('urls').update({
-                                        "android": res.url
-                                    });
-                                }
+    let userRef = firebase.database().ref('users');
+    userRef.on('value',function (snapshot) {
+        snapshot.forEach(function (childSnapshot) {
+            let userID = childSnapshot.key;
+            let childProducts = childSnapshot.val().products;
+            let androidArr = [];
+            let iosArr = [];
+            let count = 0;
+            let i;
+            for(i in childProducts){
+                count++;
+                if (childProducts[i].hasOwnProperty('android') && childProducts[i].hasOwnProperty('ios')) {
+                    let android = {
+                        "Product ID":(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
+                        "Locale":(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
+                        "Title":(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
+                        "Description":(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
+                    };
+                    let ios = {
+                        product_id:(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
+                        locale:(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
+                        title:(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
+                        description:(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
+                    };
+                    android = Object.assign({}, childProducts[i].android, android);
+                    ios = Object.assign({}, childProducts[i].ios, ios);
+                    androidArr.push(android);
+                    iosArr.push(ios);
 
-                            });
-                        }
-                    });
                 }
-                if (iosArr.length > 0) {
-                    products.createXML(iosArr,outputXML,(response) => {
-                        if (response.statusCode === 200){
-                            products.uploadFileToBucket(outputXML,response.data,(res) => {
-                                if (res.statusCode === 200) {
-                                    ref.child('urls').update({
-                                        "ios": res.url
+                if (count === Object.keys(childProducts).length) {
+                    if(androidArr.length > 0){
+                        products.createCSV(androidArr,userID+'.csv',function (response) {
+                            if (response.statusCode === 200){
+                                if (response.statusCode === 200){
+                                    firebase.database().ref('users/'+userID).child('urls').update({
+                                        "android": response.url
                                     });
                                 }
-                            });
-                        }
-                    });
+                            }
+                        });
+                    }
+                    if (iosArr.length > 0) {
+                        products.createXML(iosArr,userID+'.xml',function (response) {
+                            if (response.statusCode === 200){
+                                firebase.database().ref('users/'+userID).child('urls').update({
+                                    "ios": response.url
+                                });
+                            }
+                        });
+                    }
                 }
             }
         });
@@ -85,8 +93,9 @@ products.index = function (){
 products.createCSV = function (array,filename,callback){
     const json2csvParser = new Json2csvParser({ androidCSVHeader });
     const csv = json2csvParser.parse(array);
-    callback({statusCode:200,data:csv});
-
+    products.uploadFileToBucket(filename,csv,function (response) {
+        callback(response);
+    });
 }
 
 //for ios
@@ -126,15 +135,15 @@ products.createXML = function (array,filename,callback) {
                         .up()
                     .up()
                     .ele('product_id',value.product_id).up()
-                    .ele('reference_name',value.reference_name).up()
-                    .ele('type',value.type).up()
+                    .ele('reference_name',(value.hasOwnProperty('reference_name')) ? value.reference_name : '').up()
+                    .ele('type',(value.hasOwnProperty('type')) ? value.type : '').up()
                     .ele('products')
                         .ele('product')
-                            .ele('cleared_for_sale',value.cleared_for_sale).up()
+                            .ele('cleared_for_sale',(value.hasOwnProperty('cleared_for_sale')) ? value.cleared_for_sale : '').up()
                             .ele('intervals')
                                 .ele('interval')
-                                    .ele('start_date',value.start_date).up()
-                                    .ele('wholesale_price_tier',value.wholesale_price_tier).up()
+                                    .ele('start_date',(value.hasOwnProperty('start_date')) ? value.start_date : '').up()
+                                    .ele('wholesale_price_tier',(value.hasOwnProperty('wholesale_price_tier')) ? value.wholesale_price_tier : '').up()
                                 .up()
                             .up()
                         .up()
@@ -142,7 +151,9 @@ products.createXML = function (array,filename,callback) {
     });
     builderList.up();
     let xml = builderList.end({pretty: true});
-    callback({statusCode:200,data:xml});
+    products.uploadFileToBucket(filename,xml,function (response) {
+        callback(response);
+    });
 }
 
 products.uploadFileToBucket = function(filename,data,callback){
@@ -155,7 +166,7 @@ products.uploadFileToBucket = function(filename,data,callback){
         console.error(`${ this.archive }: ${JSON.stringify(err)}`);
     });
     gcsStream.on('finish', () => {
-        callback({statusCode:200,url:`gs://${config.storageBucket}/${filename}`});
+        callback({statusCode:200,url:`https://storage.googleapis.com/${config.storageBucket}/${filename}`});
     });
     gcsStream.end();
 }

@@ -12,12 +12,12 @@
   "dependencies": {
     "@google-cloud/storage": "^1.6.0",
     "express": "^4.16.2",
-    "request": "^2.83.0",
     "firebase": "^4.10.1",
-    "firebase-admin": "~5.8.1",
+    "firebase-admin": "^5.9.1",
     "firebase-functions": "^0.8.1",
     "fs": "0.0.1-security",
     "json2csv": "^4.0.0-alpha.0",
+    "request": "^2.83.0",
     "xmlbuilder": "^9.0.7"
   },
   "devDependencies": {
