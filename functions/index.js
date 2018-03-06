@@ -26,74 +26,109 @@ const storage = googleStorage({
 });
 const bucket = storage.bucket(config.storageBucket);
 
+const dubProductsCount = 4;
+
 let androidCSVHeader = ['Product ID','Published State','Purchase Type','Auto Translate','Locale', 'Title', 'Description','Auto Fill Prices','Price'];
 
 let products = {};
 
-products.index = function (){
+products.index = () => {
 
     let userRef = firebase.database().ref('users');
-    userRef.on('value',function (snapshot) {
-        snapshot.forEach(function (childSnapshot) {
-            let userID = childSnapshot.key;
-            let childProducts = childSnapshot.val().products;
-            let androidArr = [];
-            let iosArr = [];
-            let count = 0;
-            let i;
-            for(i in childProducts){
-                count++;
-                if (childProducts[i].hasOwnProperty('android') && childProducts[i].hasOwnProperty('ios')) {
-                    let android = {
-                        "Product ID":(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
-                        "Locale":(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
-                        "Title":(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
-                        "Description":(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
-                    };
-                    let ios = {
-                        product_id:(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
-                        locale:(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
-                        title:(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
-                        description:(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
-                    };
-                    android = Object.assign({}, childProducts[i].android, android);
-                    ios = Object.assign({}, childProducts[i].ios, ios);
-                    androidArr.push(android);
-                    iosArr.push(ios);
+    products.writeProductData(userRef,(response) => {
+        if (response.statusCode === 200){
+            userRef.once('value',(snapshot) => {
+                snapshot.forEach((childSnapshot) => {
+                    let userID = childSnapshot.key;
+                    let childProducts = childSnapshot.val().products;
+                    let androidArr = [];
+                    let iosArr = [];
+                    let count = 0;
+                    let i;
+                    for(i in childProducts){
+                        count++;
+                        if (childProducts[i].hasOwnProperty('android') && childProducts[i].hasOwnProperty('ios')) {
+                            let android = {
+                                "Product ID":(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
+                                "Locale":(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
+                                "Title":(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
+                                "Description":(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
+                            };
+                            let ios = {
+                                product_id:(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
+                                locale:(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
+                                title:(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
+                                description:(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
+                            };
+                            android = Object.assign({}, childProducts[i].android, android);
+                            ios = Object.assign({}, childProducts[i].ios, ios);
+                            androidArr.push(android);
+                            iosArr.push(ios);
 
-                }
-                if (count === Object.keys(childProducts).length) {
-                    if(androidArr.length > 0){
-                        products.createCSV(androidArr,userID+'.csv',function (response) {
-                            if (response.statusCode === 200){
-                                if (response.statusCode === 200){
-                                    firebase.database().ref('users/'+userID).child('urls').update({
-                                        "android": response.url
-                                    });
-                                }
-                            }
-                        });
-                    }
-                    if (iosArr.length > 0) {
-                        products.createXML(iosArr,userID+'.xml',function (response) {
-                            if (response.statusCode === 200){
-                                firebase.database().ref('users/'+userID).child('urls').update({
-                                    "ios": response.url
+                        }
+                        if (count === Object.keys(childProducts).length) {
+                            if(androidArr.length > 0){
+                                products.createCSV(androidArr,userID + '.csv',(response) => {
+                                    if (response.statusCode === 200){
+                                        firebase.database().ref('users/'+userID).child('urls').update({
+                                            "android": response.url
+                                        });
+                                    }
                                 });
                             }
-                        });
+                            if (iosArr.length > 0) {
+                                products.createXML(iosArr,userID + '.xml',(response) => {
+                                    if (response.statusCode === 200){
+                                        firebase.database().ref('users/'+userID).child('urls').update({
+                                            "ios": response.url
+                                        });
+                                    }
+                                });
+                            }
+                        }
+                    }
+                });
+            });
+        }
+    });
+};
+products.writeProductData = (userRef,callback) => {
+    userRef.once('value',(snapshot) => {
+        snapshot.forEach((childSnapshot) => {
+            let userId = childSnapshot.key;
+            let childProducts = childSnapshot.val().products;
+            for(let i in childProducts){
+                if (childProducts[i].hasOwnProperty('android') && childProducts[i].hasOwnProperty('ios') && !childProducts[i].hasOwnProperty('derived')) {
+                    for (let j = 0; j < dubProductsCount; j++) {
+                        let product = JSON.parse(JSON.stringify(childProducts[i]));
+                        if (product.android.hasOwnProperty('Price')) {
+                            product.android.Price.USD = product.android.Price.USD + (j+1)*10
+                        }
+                        if (product.ios.hasOwnProperty('wholesale_price_tier')) {
+                            product.ios.wholesale_price_tier = parseInt(product.ios.wholesale_price_tier) + (j+1)
+                        }
+                        if (product.hasOwnProperty('product_id')) {
+                            product.product_id = product.product_id + '_' +(j+1)
+                        }
+                        product.derived = true;
+                        firebase.database().ref('/users/' + userId +'/products/' + i + '_' + (j+1)).set(product);
+                        if ( j === (dubProductsCount-1)) {
+                            firebase.database().ref('/users/' + userId + '/products/' + i).update({
+                                "derived": true
+                            });
+                        }
                     }
                 }
             }
         });
+        callback({statusCode:200});
     });
-};
-
+}
 //for android
 products.createCSV = function (array,filename,callback){
     const json2csvParser = new Json2csvParser({ androidCSVHeader });
     const csv = json2csvParser.parse(array);
-    products.uploadFileToBucket(filename,csv,function (response) {
+    products.uploadFileToBucket(filename,csv,(response) => {
         callback(response);
     });
 }
@@ -151,15 +186,15 @@ products.createXML = function (array,filename,callback) {
     });
     builderList.up();
     let xml = builderList.end({pretty: true});
-    products.uploadFileToBucket(filename,xml,function (response) {
+    products.uploadFileToBucket(filename,xml,(response) => {
         callback(response);
     });
 }
 
 products.uploadFileToBucket = function(filename,data,callback){
-
+    let datetime  = Math.floor(Date.now() / 1000);
+    filename = datetime + '_' + filename;
     let gcsStream = bucket.file(filename).createWriteStream();
-
     gcsStream.write( data);
     gcsStream.on('error', (err) => {
         console.error(`${ this.archive }: Error storage file write.`);
