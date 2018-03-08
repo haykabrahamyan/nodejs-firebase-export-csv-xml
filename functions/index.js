@@ -1,11 +1,10 @@
 // The Cloud Functions for Firebase SDK to create Cloud Functions and setup triggers.
 const functions = require('firebase-functions');
-const fs = require('fs');
 const firebase = require('firebase');
 const googleStorage = require('@google-cloud/storage');
 const Json2csvParser = require('json2csv').Parser;
 const builder = require('xmlbuilder');
-const request = require('request');
+
 // The Firebase Admin SDK to access the Firebase Realtime Database.
 const admin = require('firebase-admin');
 admin.initializeApp(functions.config().firebase);
@@ -33,66 +32,62 @@ let androidCSVHeader = ['Product ID','Published State','Purchase Type','Auto Tra
 let products = {};
 
 products.index = () => {
-
     let userRef = firebase.database().ref('users');
-    products.writeProductData(userRef,(response) => {
-        if (response.statusCode === 200){
-            userRef.once('value',(snapshot) => {
-                snapshot.forEach((childSnapshot) => {
-                    let userID = childSnapshot.key;
-                    let childProducts = childSnapshot.val().products;
-                    let androidArr = [];
-                    let iosArr = [];
-                    let count = 0;
-                    let i;
-                    for(i in childProducts){
-                        count++;
-                        if (childProducts[i].hasOwnProperty('android') && childProducts[i].hasOwnProperty('ios')) {
-                            let android = {
-                                "Product ID":(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
-                                "Locale":(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
-                                "Title":(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
-                                "Description":(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
-                            };
-                            let ios = {
-                                product_id:(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
-                                locale:(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
-                                title:(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
-                                description:(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
-                            };
-                            android = Object.assign({}, childProducts[i].android, android);
-                            ios = Object.assign({}, childProducts[i].ios, ios);
-                            androidArr.push(android);
-                            iosArr.push(ios);
+    userRef.once('value',(snapshot) => {
+        snapshot.forEach((childSnapshot) => {
+            let userID = childSnapshot.key;
+            let childProducts = childSnapshot.val().products;
+            let androidArr = [];
+            let iosArr = [];
+            let count = 0;
+            let i;
+            for(i in childProducts){
+                count++;
+                if (childProducts[i].hasOwnProperty('android') && childProducts[i].hasOwnProperty('ios')) {
+                    let android = {
+                        "Product ID":(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
+                        "Locale":(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
+                        "Title":(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
+                        "Description":(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
+                    };
+                    let ios = {
+                        product_id:(childProducts[i].hasOwnProperty('product_id')) ? childProducts[i].project_id : '',
+                        locale:(childProducts[i].hasOwnProperty('locale')) ? childProducts[i].locale : '',
+                        title:(childProducts[i].hasOwnProperty('title')) ? childProducts[i].title : '',
+                        description:(childProducts[i].hasOwnProperty('description')) ? childProducts[i].description : ''
+                    };
+                    android = Object.assign({}, childProducts[i].android, android);
+                    ios = Object.assign({}, childProducts[i].ios, ios);
+                    androidArr.push(android);
+                    iosArr.push(ios);
 
-                        }
-                        if (count === Object.keys(childProducts).length) {
-                            if(androidArr.length > 0){
-                                products.createCSV(androidArr,userID + '.csv',(response) => {
-                                    if (response.statusCode === 200){
-                                        firebase.database().ref('users/'+userID).child('urls').update({
-                                            "android": response.url
-                                        });
-                                    }
+                }
+                if (count === Object.keys(childProducts).length) {
+                    if(androidArr.length > 0){
+                        products.createCSV(androidArr,userID + '.csv',(response) => {
+                            if (response.statusCode === 200){
+                                firebase.database().ref('users/'+userID).child('urls').update({
+                                    "android": response.url
                                 });
                             }
-                            if (iosArr.length > 0) {
-                                products.createXML(iosArr,userID + '.xml',(response) => {
-                                    if (response.statusCode === 200){
-                                        firebase.database().ref('users/'+userID).child('urls').update({
-                                            "ios": response.url
-                                        });
-                                    }
-                                });
-                            }
-                        }
+                        });
                     }
-                });
-            });
-        }
+                    if (iosArr.length > 0) {
+                        products.createXML(iosArr,userID + '.xml',(response) => {
+                            if (response.statusCode === 200){
+                                firebase.database().ref('users/'+userID).child('urls').update({
+                                    "ios": response.url
+                                });
+                            }
+                        });
+                    }
+                }
+            }
+        });
     });
 };
-products.writeProductData = (userRef,callback) => {
+products.writeProductData = () => {
+    let userRef = firebase.database().ref('users');
     userRef.once('value',(snapshot) => {
         snapshot.forEach((childSnapshot) => {
             let userId = childSnapshot.key;
@@ -121,7 +116,6 @@ products.writeProductData = (userRef,callback) => {
                 }
             }
         });
-        callback({statusCode:200});
     });
 }
 //for android
@@ -205,12 +199,21 @@ products.uploadFileToBucket = function(filename,data,callback){
     });
     gcsStream.end();
 }
-// Listens for new messages added to /messages/:pushId/original and creates an
-// uppercase version of the message to /messages/:pushId/uppercase
-exports.eventonWrite = functions.database.ref('/users/{userUID}/products').onWrite((event) => {
+
+exports.eventonCreate = functions.database.ref('/users/{userUID}/products/{productID}').onCreate((event) => {
+    if (event.data.val().derived === undefined){
+        products.writeProductData();
+    }
+    return true;
+});
+exports.eventonUpdate = functions.database.ref('/users/{userUID}/products/{productID}').onUpdate((event) => {
+    if (event.data.val().hasOwnProperty('derived') && event.data.val().derived === true){
+        products.index();
+    }
+    return true;
+});
+exports.eventonDelete = functions.database.ref('/users/{userUID}/products/{productID}').onDelete((event) => {
     products.index();
     return true;
 });
-
-
 
